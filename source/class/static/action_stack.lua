@@ -3,13 +3,13 @@ ActionStack = {}
 ActionStack.redoStack = {}
 ActionStack.undoStack = {}
 
-function ActionStack.actionLoadSFDItem(path)
+function ActionStack.loadSFDItem(path)
     local command = {}
     command.type = "load_sfd_item"
     command.context = {}
     command.context.path = path
     command.context.index = #App.loadedItems + 1
-    command.context.item = SFDItem.fromBinary(ByteStream.fromFile(command.context.path))
+    command.context.item = SFDItem.fromBinary(command.context.path)
 
     for i=1, #App.loadedItems do
         if (App.loadedItems[i] == nil) then
@@ -20,23 +20,21 @@ function ActionStack.actionLoadSFDItem(path)
 
     command.doAction = function ()
         App.loadedItems[command.context.index] = command.context.item
-        App.ui.middle.primaryPanel:refreshLoaded()
     end
 
     command.undoAction = function ()
         App.loadedItems[command.context.index] = nil
-        App.ui.middle.primaryPanel:refreshLoaded()
     end
 
     ActionStack.perform(command)
 end
 
-function ActionStack.actionLoadSFDAnimations(path)
+function ActionStack.loadSFDAnimations(path)
     local command = {}
     command.type = "load_sfd_animations"
     command.context = {}
     command.context.path = path
-    command.context.animations = SFDAnimation.fromBinary(ByteStream.fromFile(command.context.path))
+    command.context.animations = SFDAnimation.fromBinary(command.context.path)
 
     command.doAction = function ()
         for i, animation in ipairs(command.context.animations) do
@@ -51,8 +49,6 @@ function ActionStack.actionLoadSFDAnimations(path)
 
             table.insert(App.loadedAnimations, index, animation)
         end
-
-        App.ui.middle.primaryPanel:refreshLoaded()
     end
 
     command.undoAction = function ()
@@ -69,8 +65,6 @@ function ActionStack.actionLoadSFDAnimations(path)
         for i, index in ipairs(indices) do
             App.loadedAnimations[index] = nil
         end
-
-        App.ui.middle.primaryPanel:refreshLoaded()
     end
 
     ActionStack.perform(command)

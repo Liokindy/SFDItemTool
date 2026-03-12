@@ -1,12 +1,19 @@
 ---@class IniHandler : Instance
----@field lines {[string]: string}
+---@field lines IniHandler.Line[]
+---@field get fun(self: IniHandler, key: string): string?
 ---@field set fun(self: IniHandler, key: string, value: string)
----@field get fun(self: IniHandler, key: string): string
 ---@field getNumber fun(self: IniHandler, key: string): number
 ---@field setNumber fun(self: IniHandler, key: string, value: number)
 ---@field getBoolean fun(self: IniHandler, key: string): boolean
 ---@field setBoolean fun(self: IniHandler, key: string, value: boolean)
----@field toFile fun(self: IniHandler, path: string)
+---@field tryGet fun(self: IniHandler, key: string, backup: string): string
+---@field tryGetNumber fun(self: IniHandler, key: string, backup: number): number
+---@field tryGetBoolean fun(self: IniHandler, key: string, backup: boolean): boolean
+
+---@class IniHandler.Line : table
+---@field type "line"|"comment"|"section"
+---@field key string
+---@field value string
 
 IniHandler = {}
 IniHandler.__index = IniHandler
@@ -22,23 +29,48 @@ function IniHandler.new()
 end
 
 ---@param path string
----@return IniHandler
+---@return IniHandler, string?
 function IniHandler.fromFile(path)
     local result = IniHandler.new()
-    local info = love.filesystem.getInfo(path)
 
-    result.lines = {}
+    local lines, status = NativeFS.lines(path)
+    if (not lines) then
+        return result, status
+    end
 
-    if (info and info.type == "file") then
-        for line in love.filesystem.lines(path) do
-            local firstCharacter = string.sub(line, 1, 1)
-            local isEmpty = (string.match(line, "^%s*$") ~= nil)
+    local i = 1
+    for line in lines do
+        local firstCharacter = string.sub(line, 1, 1)
+        local isEmpty = (string.match(line, "^%s*$") ~= nil)
 
-            if (not isEmpty and not (firstCharacter == ";" or firstCharacter == "#" or firstCharacter == "[")) then
+        if (not isEmpty) then
+            if (firstCharacter == ";") then
+                result.lines[i] = {
+                    type = "comment",
+                    key = line,
+                    value = "",
+                }
+
+                i = i + 1
+            elseif (firstCharacter == "[") then
+                result.lines[i] = {
+                    type = "section",
+                    key = string.gsub(string.gsub(line, "^%[", ""), "%]$", ""), -- remove '[' and ']'
+                    value = "",
+                }
+
+                i = i + 1
+            else
                 local key, value = IniHandler.splitLine(line)
 
                 if (key and value) then
-                    result.lines[key] = value
+                    result.lines[i] = {
+                        type = "line",
+                        key = string.lower(key),
+                        value = value,
+                    }
+
+                    i = i + 1
                 end
             end
         end
@@ -51,15 +83,15 @@ end
 ---@return string?, string?
 function IniHandler.splitLine(line)
     line = string.match(line, "^%s*(.-)%s*$") -- spaces
-    line = string.gsub(line, "%s*[;#].*$", "") -- comments
+    line = string.gsub(line, "%s*[;].*$", "") -- comments
 
     if (line == "") then
-        return nil, nil
+        return
     end
 
     local key, value = string.match(line, "^(.-)=(.*)$") -- first "="
     if (not key) then
-        return nil, nil
+        return
     end
 
     key = string.match(key, "^%s*(.-)%s*$") -- spaces
@@ -70,28 +102,88 @@ end
 
 ---@param self IniHandler
 ---@param path string
+---@return boolean, string?
 function IniHandler.toFile(self, path)
-    local iniFileData = ""
+    local data = ""
 
-    for key, value in pairs(self.lines) do
-        iniFileData = iniFileData .. key .. "=" .. value .. "\n"
+    for i, line in ipairs(self.lines) do
+        if (line.type == "line") then
+            data = data .. line.key .. "=" .. line.value
+        elseif (line.type == "comment") then
+            data = data .. line.key
+        elseif (line.type == "section") then
+            data = data .. "[" .. line.key .. "]"
+        end
+
+        data = data .. "\n"
     end
 
-    love.filesystem.write(path, iniFileData)
+    local info = NativeFS.getInfo(path, "file")
+    if (info) then
+        local success, status = NativeFS.remove(path)
+        if (not success) then return false, status end
+    end
+
+    return NativeFS.write(path, data)
 end
 
 ---@param self IniHandler
 ---@param key string
----@return string
+---@return string?
 function IniHandler.get(self, key)
-    return self.lines[string.lower(key)]
+    key = string.lower(key)
+
+    for i, line in ipairs(self.lines) do
+        if (line.type == "line" and line.key == key) then
+            return line.value
+        end
+    end
+end
+
+---@param self IniHandler
+---@param key string
+---@param backup string
+---@return string
+function IniHandler.tryGet(self, key, backup)
+    key = string.lower(key)
+
+    return self:get(key) or backup
+end
+
+---@param self IniHandler
+---@param key string
+---@param backup boolean
+---@return boolean
+function IniHandler.tryGetBoolean(self, key, backup)
+    return string.lower(self:tryGet(key, tostring(backup))) == "true"
+end
+
+---@param self IniHandler
+---@param key string
+---@param backup number
+---@return number
+function IniHandler.tryGetNumber(self, key, backup)
+    return tonumber(self:tryGet(key, tostring(backup))) or backup
 end
 
 ---@param self IniHandler
 ---@param key string
 ---@param value string
 function IniHandler.set(self, key, value)
-    self.lines[string.lower(key)] = value
+    key = string.lower(key)
+
+    for i, line in ipairs(self.lines) do
+        if (line.type == "line" and line.key == key) then
+            line.value = value
+            break
+        end
+    end
+
+    table.insert(self.lines, {
+        type = "line",
+        key = key,
+        value = value,
+    })
 end
 
 ---@param self IniHandler
@@ -112,7 +204,7 @@ end
 ---@param key string
 ---@return boolean
 function IniHandler.getBoolean(self, key)
-    return string.lower(self:get(key)) == "true"
+    return string.lower(self:get(key) or "") == "true"
 end
 
 ---@param self IniHandler

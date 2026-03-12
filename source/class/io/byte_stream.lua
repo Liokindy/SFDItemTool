@@ -38,20 +38,20 @@ function ByteStream.new()
 end
 
 ---@param path string
----@return ByteStream?
+---@return ByteStream?, string?
 function ByteStream.fromFile(path)
-    local fileInfo = love.filesystem.getInfo(path)
+    local self = ByteStream.new()
 
-    if (fileInfo and fileInfo.type == "file") then
-        local fileData, fileSize = love.filesystem.read("string", path, nil)
 
-        if (fileData and fileSize) then
-            local self = ByteStream.new()
+    local fileData, fileSize = NativeFS.read("string", path, nil)
 
-            self:setData(love.filesystem.read("string", path) --[[@as string]])
-            return self
-        end
+    if (fileData and fileSize) then
+        self:setData(fileData --[[@as string]])
+    else
+        return nil, fileSize --[[@as string]]
     end
+
+    return self
 end
 
 ---@param self ByteStream

@@ -7,11 +7,13 @@
 ---@field height number
 ---@field background boolean
 ---@field border boolean
+---@field focusable boolean
+---@field draggable boolean
 ---@field addChild fun(self: UIElement, ...: UIElement)
 ---@field removeChild fun(self: UIElement, ...: UIElement)
 ---@field getDrawX fun(self: UIElement): number
 ---@field getDrawY fun(self: UIElement): number
----@field getOverlap fun(self: UIElement, x: number, y: number): UIElement?
+---@field getOverlap fun(self: UIElement, x: number, y: number, focusable: boolean): UIElement?
 ---@field textinput fun(self: UIElement, text: string)
 ---@field keypressed fun(self: UIElement, key: love.KeyConstant)
 ---@field keyreleased fun(self: UIElement, key: love.KeyConstant)
@@ -20,10 +22,10 @@
 ---@field mousemoved fun(self: UIElement, x: number, y: number, dx: number, dy: number)
 ---@field wheelmoved fun(self: UIElement, x: number, y: number)
 ---@field update fun(self: UIElement, deltaTime: number)
----@field updatePosition fun(self: UIElement)
 ---@field draw fun(self: UIElement)
 ---@field drawChildren fun(self: UIElement)
 ---@field drawBackground fun(self: UIElement)
+---@field drawBorder fun(self: UIElement)
 ---@field inside fun(self: UIElement, x: number, y: number): boolean
 ---@field pushScissor fun(self: UIElement): number, number, number, number
 
@@ -31,24 +33,19 @@ UIElement = {}
 UIElement.__type = "UIElement"
 UIElement.__index = UIElement
 
----@param x number?
----@param y number?
----@param width number?
----@param height number?
 ---@return UIElement
-function UIElement.new(x, y, width, height)
+function UIElement.new()
     local self = Instance.new(UIElement) --[[@as UIElement]]
 
-    self.x = x or 0
-    self.y = y or 0
-    self.width = width or 1
-    self.height = height or 1
+    self.x = 0
+    self.y = 0
+    self.width = 0
+    self.height = 0
     self.children = {}
-    self.background = true
+    self.focusable = true
+    self.draggable = false
     self.border = true
-
-    self:updatePosition()
-
+    self.background = true
     return self
 end
 
@@ -81,16 +78,18 @@ end
 ---@param self UIElement
 ---@param x number
 ---@param y number
+---@param focusable boolean
 ---@return UIElement?
-function UIElement.getOverlap(self, x, y)
+function UIElement.getOverlap(self, x, y, focusable)
     for i=#self.children, 1, -1 do
         local child = self.children[i]
-        if (child:inside(x, y)) then
-            return (child:getOverlap(x, y) or child)
+
+        if (((focusable and child.focusable) or not focusable) and child:inside(x, y)) then
+            return child:getOverlap(x, y, focusable)
         end
     end
 
-    if (self:inside(x, y)) then
+    if (((focusable and self.focusable) or not focusable) and self:inside(x, y)) then
         return self
     end
 
@@ -102,13 +101,6 @@ end
 ---@param y number
 function UIElement.inside(self, x, y)
     return (self:getDrawX() < x and self:getDrawX() + self.width > x and self:getDrawY() < y and self:getDrawY() + self.height > y)
-end
-
----@param self UIElement
-function UIElement.updatePosition(self)
-    for i, child in ipairs(self.children) do
-        child:updatePosition()
-    end
 end
 
 ---@param self UIElement
@@ -220,6 +212,7 @@ function UIElement.draw(self)
     local scissorX, scissorY, scissorWidth, scissorHeight = self:pushScissor()
 
     self:drawBackground()
+    self:drawBorder()
     self:drawChildren()
 
     love.graphics.setScissor(scissorX, scissorY, scissorWidth, scissorHeight)
@@ -233,14 +226,17 @@ function UIElement.drawBackground(self)
 
     love.graphics.setColor(App.theme.main)
     love.graphics.rectangle("fill", self:getDrawX(), self:getDrawY(), self.width, self.height)
+end
 
+---@param self UIElement
+function UIElement.drawBorder(self)
     if (not self.border) then
         return
     end
-    
+
     local lineWidth = love.graphics.getLineWidth()
     local lineOffset = lineWidth * 0.5
-    
+
     love.graphics.setColor(App.theme.highlight)
     love.graphics.rectangle("line", self:getDrawX() + lineOffset, self:getDrawY() + lineOffset, self.width - lineOffset * 2, self.height - lineOffset * 2)
 end

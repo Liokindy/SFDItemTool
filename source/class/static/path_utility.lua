@@ -1,18 +1,18 @@
--- love.filesystem likes Unix paths
-
 PathUtility = {}
+
+PathUtility.systemPathSeparator = string.sub(package.config, 1, 1)
 
 ---@param path string
 ---@return string
 function PathUtility.trimStart(path)
-    local s = string.gsub(string.gsub(path, "^%./", ""), "^/", "")
+    local s = string.gsub(string.gsub(path, "^%." .. PathUtility.systemPathSeparator, ""), "^" .. PathUtility.systemPathSeparator, "")
     return s
 end
 
 ---@param path string
 ---@return string
 function PathUtility.trimEnd(path)
-    local s = string.gsub(path, "/$", "")
+    local s = string.gsub(path, PathUtility.systemPathSeparator .. "$", "")
     return s
 end
 
@@ -24,14 +24,25 @@ end
 
 ---@param path string
 ---@param ... string
+---@return string
 function PathUtility.add(path, ...)
     path = PathUtility.trimEnd(path)
 
     for _, subPath in ipairs({...}) do
-        path = path .. "/" .. subPath
+        path = path .. PathUtility.systemPathSeparator .. subPath
     end
 
     return path
+end
+
+---@param s string
+---@param from string
+---@param replacement string
+---@return string, integer count
+function PathUtility.replace(s, from, replacement)
+    from = string.gsub(from, "[%W%.%+%-%*%?%^%$%(%)%[%]]", "%%%1") -- escape lua string patterns
+
+    return string.gsub(s, from, replacement)
 end
 
 ---@param path string
@@ -39,7 +50,14 @@ end
 function PathUtility.unixify(path)
     path = string.gsub(path, "\\", "/")
     path = string.gsub(path, "/+", "/")
-    path = string.gsub(path, "^([A-Za-z]):/", "/%1/") -- drive letters on windows
+
+    return path
+end
+
+---@param path string
+---@return string
+function PathUtility.osify(path)
+    path = string.gsub(path, "/", PathUtility.systemPathSeparator)
 
     return path
 end
@@ -55,7 +73,7 @@ end
 ---@return string
 function PathUtility.getName(path)
     path = PathUtility.trimEnd(path)
-    return string.match(path, "([^/]+)$") or ""
+    return string.match(path, "([^" .. PathUtility.systemPathSeparator .. "]+)$") or ""
 end
 
 ---@param path string
@@ -70,7 +88,7 @@ function PathUtility.getDirectories(path)
     path = PathUtility.trim(path)
 
     local directories = {}
-    for directory in path:gmatch("[^/]+") do
+    for directory in path:gmatch("[^" .. PathUtility.systemPathSeparator .. "]+") do
         table.insert(directories, directory)
     end
 
@@ -80,19 +98,19 @@ end
 ---@param path string
 ---@return string
 function PathUtility.getDirectoryPath(path)
-    return string.match(path, "^(.*)/[^/]+$") or ""
+    return string.match(path, "^(.*)" .. PathUtility.systemPathSeparator .. "[^" .. PathUtility.systemPathSeparator .. "]+$") or ""
 end
 
 ---@param path string
 function PathUtility.isFile(path)
-    local info = love.filesystem.getInfo(path)
+    local info = NativeFS.getInfo(path)
 
     return (info and info.type == "file")
 end
 
 ---@param path string
 function PathUtility.isDirectory(path)
-    local info = love.filesystem.getInfo(path)
+    local info = NativeFS.getInfo(path)
 
     return (info and info.type == "directory")
 end
@@ -104,11 +122,11 @@ function PathUtility.getFiles(path, namePattern, itemTable)
     path = PathUtility.trimEnd(path)
     itemTable = itemTable or {}
 
-	local items = love.filesystem.getDirectoryItems(path)
+	local items = NativeFS.getDirectoryItems(path)
 
 	for i, item in ipairs(items) do
 		local fullPath = PathUtility.add(path, item)
-		local itemInfo = love.filesystem.getInfo(fullPath)
+		local itemInfo = NativeFS.getInfo(fullPath)
 
 		if (itemInfo) then
 			if (itemInfo.type == "file") then

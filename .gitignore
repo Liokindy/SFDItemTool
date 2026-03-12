@@ -1,2 +1,4 @@
 .vscode
-release
+.package
+.love
+binary

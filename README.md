@@ -7,7 +7,8 @@ A light weight and simplistic tool for creating content (items and animations) f
 
 ### CREDITS
 
-- [Portable File Dialogs](https://github.com/samhocevar/portable-file-dialogs) library by ["Sam Hocevar"](https://github.com/samhocevar).
+- [Portable File Dialogs](https://github.com/samhocevar/portable-file-dialogs) (WTFPL license) library by ["Sam Hocevar"](https://github.com/samhocevar).
+- [NativeFS](https://github.com/zorggn/nativefs) (MIT license) library by ["zorg"](https://github.com/zorggn).
 
 ### LEGACY CLI USAGE
 

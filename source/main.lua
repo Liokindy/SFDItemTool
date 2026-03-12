@@ -2,10 +2,13 @@ if (os.getenv("LOCAL_LUA_DEBUGGER_VSCODE") == "1") then require("lldebugger").st
 ---@alias Color {[1]: number, [2]: number, [3]: number, [4]: number}
 
 print("loading libraries")
+FFI = require("ffi")
 Bit = require("bit") --[[@as bitlib]]
 UTF8 = require("utf8") --[[@as utf8]]
-PDF = require("library.pdf")
+NativeFS = require("library.nativefs.nativefs")
+PortableFileDialogs = require("library.portable_file_dialogs.portable_file_dialogs") --[[@as PortableFileDialogs]]
 
+--[[
 local function loadCLI(arguments)
     local startTime = love.timer.getTime()
 
@@ -62,7 +65,7 @@ local function loadCLI(arguments)
             print(string.format("converting FOLDERS to ITEMS...", #inputItems))
 
             for i, itemPath in ipairs(inputItems) do
-                local status, message = pcall(function()
+                local status, message = pcall(function ()
                     local itemExtension = PathUtility.getExtension(itemPath)
                     local itemDirectory = PathUtility.getDirectoryPath(itemPath)
 
@@ -88,7 +91,7 @@ local function loadCLI(arguments)
             print(string.format("converting ITEMS to FOLDERS...", #inputItems))
 
             for i, itemPath in ipairs(inputItems) do
-                local status, message = pcall(function()
+                local status, message = pcall(function ()
                     local itemExtension = PathUtility.getExtension(itemPath)
                     local itemDirectory = PathUtility.getDirectoryPath(itemPath)
 
@@ -112,7 +115,7 @@ local function loadCLI(arguments)
             print(string.format("passing ITEMS to ITEMS...", #inputItems))
 
             for i, itemPath in ipairs(inputItems) do
-                local status, message = pcall(function()
+                local status, message = pcall(function ()
                     local itemExtension = PathUtility.getExtension(itemPath)
                     local itemDirectory = PathUtility.getDirectoryPath(itemPath)
 
@@ -141,13 +144,20 @@ local function loadCLI(arguments)
 
     print(string.format("finished in %.2fms", (endTime - startTime) * 1000))
 end
+]]
 
 App = {}
 
 ---@type love.load
 function love.load(arguments)
-    print("loading classes")
+    love.window.setDisplaySleepEnabled(true)
+    love.graphics.setDefaultFilter("nearest", "nearest")
+    love.graphics.setLineStyle("rough")
+    love.graphics.setLineWidth(1)
+    love.graphics.setBackgroundColor(1, 0, 1, 1)
+    love.keyboard.setKeyRepeat(true)
 
+    print("loading classes")
     local function getLuaFiles(path, result)
         local items = love.filesystem.getDirectoryItems(path)
 
@@ -175,85 +185,198 @@ function love.load(arguments)
         require(string.gsub(string.gsub(path, "/", "."), "%.lua", ""))
     end
 
-    if (not (love.graphics and love.window)) then
-        loadCLI(arguments)
-        love.event.quit(0)
-        return
-    end
-
     App = {}
     App.version = "2.0"
     App.debug = false
+    App.close = false
     App.updateTime = 0
     App.drawTime = 0
+    App.cursor = love.mouse.getSystemCursor("arrow")
 
-    print("loading theme")
-    App.theme = {}
-    App.theme.dark = false
-    App.theme.accent = {0.9, 0.2, 0.5, 1} --[[@as Color]]
-    App.theme.main = {1, 1, 1, 1} --[[@as Color]]
-    App.theme.highlight = {0, 0, 0, 0.1} --[[@as Color]]
-    App.theme.mute = {0, 0, 0, 0.3} --[[@as Color]]
-    App.theme.text = {}
-    App.theme.text.main = {0, 0, 0, 0.5} --[[@as Color]]
-    App.theme.text.highlight = {0, 0, 0, 1} --[[@as Color]]
-    App.theme.preview = {}
-    App.theme.preview.background = {0.4, 0.4, 0.4, 1} --[[@as Color]]
-    App.theme.preview.grid = {1, 1, 1, 0.1} --[[@as Color]]
-    App.theme.preview.x = {1, 0, 0, 1} --[[@as Color]]
-    App.theme.preview.y = {0, 1, 0, 1} --[[@as Color]]
+    print("loading configuration")
+    App.configuration = {}
 
+    local handler = IniHandler.fromFile(PathUtility.osify(PathUtility.add(love.filesystem.getWorkingDirectory(), "configuration.ini")))
+    App.configuration.inputPath = handler:tryGet("input_path", PathUtility.osify(PathUtility.add(love.filesystem.getWorkingDirectory(), "Input")))
+    App.configuration.outputPath = handler:tryGet("output_path", PathUtility.osify(PathUtility.add(love.filesystem.getWorkingDirectory(), "Output")))
+    App.configuration.themeDark = handler:tryGetBoolean("theme_dark", false)
+    App.configuration.themeAccent = ColorUtility.fromHEX(handler:tryGet("theme_accent", ColorUtility.toHEX({0.9, 0.2, 0.5, 1})))
+    App.configuration.fontSize = handler:tryGetNumber("font_size", 12)
+    App.configuration.useMultipleThreads = handler:tryGetBoolean("use_multiple_threads", false)
+    App.configuration.languageFile = handler:tryGet("language_file", "asset/language/english.ini")
 
-    print("loading font")
+    App.theme = {} --[[@as {[string]: Color}]]
+    App.theme.accent = App.configuration.themeAccent
+
+    if (not App.configuration.themeDark) then
+        App.theme.main = {1, 1, 1, 1}
+        App.theme.highlight = {0, 0, 0, 0.15}
+        App.theme.mute = {0, 0, 0, 0.3}
+        App.theme.text = {}
+        App.theme.textMain = {0, 0, 0, 0.5}
+        App.theme.textHighlight = {0, 0, 0, 1}
+    else
+        App.theme.main = {0.1, 0.1, 0.1, 1}
+        App.theme.highlight = {0.8, 0.8, 0.8, 0.15}
+        App.theme.mute = {0.05, 0.05, 0.05, 0.3}
+        App.theme.textMain = {0.9, 0.9, 0.9, 0.5}
+        App.theme.textHighlight = {0.9, 0.9, 0.9, 1}
+    end
+
+    print("loading fonts")
+    local fontRegularPath = PathUtility.osify(PathUtility.add(love.filesystem.getWorkingDirectory(), "asset/font/noto_sans/NotoSans-Regular.ttf"))
+    local fontRegularData = NativeFS.read("data", fontRegularPath) --[[@as string]]
+    local fontBoldPath = PathUtility.osify(PathUtility.add(love.filesystem.getWorkingDirectory(), "asset/font/noto_sans/NotoSans-Bold.ttf"))
+    local fontBoldData = NativeFS.read("data", fontBoldPath) --[[@as string]]
+
     App.font = {}
-    App.font.size = 12
-    App.font.regular = love.graphics.newFont("asset/font/noto_sans/NotoSans-Regular.ttf", App.font.size)
-    App.font.bold = love.graphics.newFont("asset/font/noto_sans/NotoSans-Bold.ttf", App.font.size)
+    App.font.regular = love.graphics.newFont(fontRegularData, App.configuration.fontSize)
+    App.font.bold = love.graphics.newFont(fontBoldData, App.configuration.fontSize)
 
-    print("loading data")
-    App.loadedLanguage = require("asset.language.english")
+    print("loading shaders")
+    local paletteShaderPath = PathUtility.osify(PathUtility.add(love.filesystem.getWorkingDirectory(), "asset/shader/palette.frag"))
+    local paletteShaderCode = NativeFS.read("string", paletteShaderPath) --[[@as string]]
+    local highlightShaderPath = PathUtility.osify(PathUtility.add(love.filesystem.getWorkingDirectory(), "asset/shader/highlight.frag"))
+    local highlightShaderCode = NativeFS.read("string", highlightShaderPath) --[[@as string]]
 
-    print("loading shader")
-    App.paletteShader = love.graphics.newShader("asset/shader/palette.frag")
-    App.highlightShader = love.graphics.newShader("asset/shader/highlight.frag")
+    App.paletteShader = love.graphics.newShader(paletteShaderCode)
+    App.highlightShader = love.graphics.newShader(highlightShaderCode)
+
+    App.items = {}
+    App.animations = {}
+
+    print("loading language")
+    App.language = IniHandler.fromFile(App.configuration.languageFile)
 
     print("starting")
-    love.window.setDisplaySleepEnabled(true)
-    love.graphics.setFont(App.font.regular)
-    love.graphics.setDefaultFilter("nearest", "nearest")
-    love.graphics.setLineStyle("rough")
-    love.graphics.setLineWidth(1)
-    love.graphics.setBackgroundColor(1, 0, 1, 1)
-    love.keyboard.setKeyRepeat(true)
-
     App.ui = UIApp.new()
+    App.uiFocusedDraggableElement = nil
+    App.uiFocusedElement = nil
+    App.uiFocusableElementUnderMouse = App.ui
+
+    if (#arguments > 0) then
+        print("reading arguments")
+
+        for i=1, #arguments do
+            local argument = arguments[i]
+
+            if (string.lower(argument) == "-input") then
+                i = i + 1
+
+                App.configuration.inputPath = arguments[i] or App.configuration.inputPath
+            end
+    
+            if (string.lower(argument) == "-output") then
+                i = i + 1
+
+                App.configuration.outputPath = arguments[i] or App.configuration.outputPath
+            end
+    
+            if (string.lower(argument) == "-to") then
+                i = i + 1
+
+                local action = string.lower(arguments[i] or "")
+                if (action == "import") then
+                    App.ui.importButton.onPressed()
+    
+                    while App.ui.subMenu do
+                        App.ui.subMenu:update(0.001)
+                        love.timer.sleep(0.001)
+                    end
+
+                    love.event.quit(0)
+                elseif (action == "export") then
+                    App.ui.exportButton.onPressed()
+    
+                    while App.ui.subMenu do
+                        App.ui.subMenu:update(0.001)
+                        love.timer.sleep(0.001)
+                    end
+
+                    love.event.quit(0)
+                end
+            end
+        end
+    end
+end
+
+---@type love.quit
+function love.quit()
+    local handler = IniHandler.new()
+    handler:set("input_path", App.configuration.inputPath)
+    handler:set("output_path", App.configuration.outputPath)
+    handler:setBoolean("theme_dark", App.configuration.themeDark)
+    handler:set("theme_accent", ColorUtility.toHEX(App.configuration.themeAccent))
+    handler:setNumber("font_size", App.configuration.fontSize)
+    handler:setBoolean("use_multiple_threads", App.configuration.useMultipleThreads)
+    handler:set("language_file", App.configuration.languageFile)
+    IniHandler.toFile(handler, PathUtility.osify(PathUtility.add(love.filesystem.getWorkingDirectory(), "configuration.ini")))
+
+    return false
 end
 
 ---@type love.resize
 function love.resize(width, height)
     App.ui.width = width
     App.ui.height = height
-    App.ui:updatePosition()
+end
+
+---@type love.focus
+function love.focus(focus)
+    if (focus) then
+
+    end
 end
 
 ---@type love.mousemoved
 function love.mousemoved(x, y, dx, dy)
-    App.ui:mousemoved(x, y, dx, dy)
+    if (App.uiFocusedDraggableElement) then
+        App.uiFocusedDraggableElement:mousemoved(x, y, dx, dy)
+        return
+    end
+
+    if (App.uiFocusableElementUnderMouse) then
+        App.uiFocusableElementUnderMouse:mousemoved(x, y, dx, dy)
+    end
 end
 
 ---@type love.mousepressed
 function love.mousepressed(x, y, button)
-    App.ui:mousepressed(x, y, button)
+    if (App.uiFocusedElement and App.uiFocusableElementUnderMouse ~= App.uiFocusedElement) then
+        App.uiFocusedElement:mousepressed(x, y, button)
+        App.uiFocusedElement = nil
+    end
+
+    if (App.uiFocusableElementUnderMouse) then
+        App.uiFocusedElement = App.uiFocusableElementUnderMouse
+        App.uiFocusedElement:mousepressed(x, y, button)
+
+        if (App.uiFocusableElementUnderMouse.draggable) then
+            App.uiFocusedDraggableElement = App.uiFocusableElementUnderMouse
+        end
+    end
+
+    --App.ui:mousepressed(x, y, button)
 end
 
 ---@type love.mousereleased
 function love.mousereleased(x, y, button)
-    App.ui:mousereleased(x, y, button)
+    if (App.uiFocusedElement) then
+        App.uiFocusedElement:mousereleased(x, y, button)
+    end
+
+    if (App.uiFocusedDraggableElement) then
+        App.uiFocusedDraggableElement = nil
+    end
+
+    --App.ui:mousereleased(x, y, button)
 end
 
 ---@type love.wheelmoved
 function love.wheelmoved(x, y)
-    App.ui:wheelmoved(x, y)
+    if (App.uiFocusableElementUnderMouse) then
+        App.uiFocusableElementUnderMouse:wheelmoved(x, y)
+    end
 end
 
 ---@type love.keypressed
@@ -273,26 +396,35 @@ function love.keypressed(key)
         end
     end
 
-    App.ui:keypressed(key)
+    if (App.uiFocusedElement) then
+        App.uiFocusedElement:keypressed(key)
+    end
 end
 
 ---@type love.keyreleased
 function love.keyreleased(key)
-    App.ui:keyreleased(key)
+    if (App.uiFocusedElement) then
+        App.uiFocusedElement:keyreleased(key)
+    end
 end
 
 ---@type love.textinput
 function love.textinput(text)
-    App.ui:textinput(text)
+    if (App.uiFocusedElement) then
+        App.ui:textinput(text)
+    end
 end
 
 ---@type love.update
 function love.update(deltaTime)
-    love.mouse.setCursor(love.mouse.getSystemCursor("arrow"))
+    App.cursor = love.mouse.getSystemCursor("arrow")
 
     local startUpdateTime = love.timer.getTime()
     App.ui:update(deltaTime)
     App.updateTime = love.timer.getTime() - startUpdateTime
+    App.uiFocusableElementUnderMouse = App.ui:getOverlap(love.mouse.getX(), love.mouse.getY(), true)
+
+    love.mouse.setCursor(App.cursor)
 end
 
 ---@type love.draw
@@ -302,6 +434,21 @@ function love.draw()
     App.drawTime = love.timer.getTime() - startDrawTime
 
     if (App.debug) then
+        if (App.uiFocusableElementUnderMouse) then
+            love.graphics.setColor(1, 0, 0, 0.2)
+            love.graphics.rectangle("fill", App.uiFocusableElementUnderMouse:getDrawX(), App.uiFocusableElementUnderMouse:getDrawY(), App.uiFocusableElementUnderMouse.width, App.uiFocusableElementUnderMouse.height)
+        end
+        
+        if (App.uiFocusedDraggableElement) then
+            love.graphics.setColor(0, 1, 0, 0.2)
+            love.graphics.rectangle("fill", App.uiFocusedDraggableElement:getDrawX(), App.uiFocusedDraggableElement:getDrawY(), App.uiFocusedDraggableElement.width, App.uiFocusedDraggableElement.height)
+        end
+
+        if (App.uiFocusedElement) then
+            love.graphics.setColor(0, 0, 1, 0.2)
+            love.graphics.rectangle("fill", App.uiFocusedElement:getDrawX(), App.uiFocusedElement:getDrawY(), App.uiFocusedElement.width, App.uiFocusedElement.height)
+        end
+
         ---@param t table
         ---@return integer
         local function tableCount(t)
@@ -323,22 +470,17 @@ function love.draw()
         text = text .. string.format("Draw: %fms", App.drawTime * 1000) .. "\n"
 
         text = text .. string.rep("=", 30) .. "\n"
-        text = text .. "AppdataDirectory:" .. "\n"
-        text = text .. "\t" .. love.filesystem.getAppdataDirectory() .. "\n"
-        text = text .. "UserDirectory:" .. "\n"
-        text = text .. "\t" .. love.filesystem.getUserDirectory() .. "\n"
-        text = text .. "WorkingDirectory:" .. "\n"
+        text = text .. "LOVE WorkingDirectory:" .. "\n"
         text = text .. "\t" .. love.filesystem.getWorkingDirectory() .. "\n"
+        text = text .. "NativeFS WorkingDirectory:" .. "\n"
+        text = text .. "\t" .. NativeFS.getWorkingDirectory() .. "\n"
         text = text .. "Source:" .. "\n"
         text = text .. "\t" .. love.filesystem.getSource() .. "\n"
-        text = text .. "SaveDirectory:" .. "\n"
-        text = text .. "\t" .. love.filesystem.getSaveDirectory() .. "\n"
 
         text = text .. string.rep("=", 30) .. "\n"
-        text = text .. string.format("Colors: %d", tableCount(App.loadedColors)) .. "\n"
-        text = text .. string.format("Palettes: %d", tableCount(App.loadedPalettes)) .. "\n"
-        text = text .. string.format("Items: %d", tableCount(App.loadedItems)) .. "\n"
-        text = text .. string.format("Animations: %d", tableCount(App.loadedAnimations)) .. "\n"
+        text = text .. string.format("Focusable Element Under Mouse: %s (%s)", tostring(App.uiFocusableElementUnderMouse and App.uiFocusableElementUnderMouse.__type or nil), tostring(App.uiFocusableElementUnderMouse)) .. "\n"
+        text = text .. string.format("Focused Draggable Element: %s (%s)", tostring(App.uiFocusedDraggableElement and App.uiFocusedDraggableElement.__type or nil), tostring(App.uiFocusedDraggableElement)) .. "\n"
+        text = text .. string.format("Focused Element: %s (%s)", tostring(App.uiFocusedElement and App.uiFocusedElement.__type or nil), tostring(App.uiFocusedElement)) .. "\n"
 
         text = text .. string.rep("=", 30) .. "\n"
         text = text .. "UNDO" .. "\n"
